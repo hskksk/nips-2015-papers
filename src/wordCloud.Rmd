@@ -1,0 +1,169 @@
+---
+title: "Exploring the NIPS 2015 Papers"
+author: "Ben Hamner, Kaggle"
+---
+
+In celebration of the [NIPS 2015](https://nips.cc) conference this week, I thought it would be fun to extract the text from all of this year's papers and explore the data on Kaggle.
+
+If you're at NIPS itself, I'll be there this Friday-Sunday afternoon (during the workshops), and would love to connect. Drop me a quick message (ben@kaggle.com) if you'd like to meet up, talk about your work, explore Kaggle's future product direction, and get teasers on the upcoming Kaggle competitions I'm most excited about.
+
+This is a really basic exploration, intended to give a quick overview of the data's structure and what's in it. I encourage you to ask interesting questions on the data and go far beyond this basic starting point.
+
+I've released the data in two equivalent forms: CSV files and a SQLite database. I'll use the SQLite database for this exploration, so let's go ahead and connect to it.
+
+```{r include=FALSE}
+library.warn <- library
+library <- function(package, help, pos = 2, lib.loc = NULL, character.only = FALSE,
+  logical.return = FALSE, warn.conflicts = TRUE, quietly = FALSE,
+  verbose = getOption("verbose")) {
+  if (!character.only) {
+    package <- as.character(substitute(package))
+  }
+
+  suppressPackageStartupMessages(library.warn(
+    package, help, pos, lib.loc, character.only = TRUE,
+    logical.return, warn.conflicts, quietly, verbose))}
+library(xtable)
+print.table <- function(table) {
+  html <- print(xtable(table), type="html", print.results=FALSE, include.rownames=FALSE)
+  cat(paste0("<div style='width:800; overflow:auto; border-width: 2;'><style>td {padding: 3px;} th {padding: 3px;}</style>", html, "</div>"))
+}
+```
+
+```{r}
+library(RSQLite)
+db <- dbConnect(dbDriver("SQLite"), "../output/database.sqlite")
+```
+
+First, let's see what tables we have to work with.
+
+```{r results='asis'} 
+library(dplyr)
+tables <- dbGetQuery(db, "SELECT Name FROM sqlite_master WHERE type='table'")
+colnames(tables) <- c("Name")
+tables <- tables %>%
+          rowwise() %>%
+          mutate(RowCount=dbGetQuery(db, paste0("SELECT COUNT(Id) RowCount FROM ", Name))$RowCount[1])
+print.table(tables)
+```
+
+As we see above, there's three tables. Papers contains one row for each of the 403 papers accepted at this NIPS. Authors contains one row for each of the 1073 authors that published papers at this years NIPS, and PaperAuthor references the 1316 paper-author pairs (for an average of 3.26 authors per paper).
+
+Next, let's look at examples of what each individual table contains.
+
+```{r results='asis'} 
+papersSample <- dbGetQuery(db, "
+SELECT *
+FROM Papers
+LIMIT 6")
+papersSample$PaperText <- paste0(substr(papersSample$PaperText, 1, 500), "...")
+print.table(papersSample)
+```
+
+We see that the papers table includes the title, event type, pdf name, abstract, and extracted text for the paper. 
+
+```{r results='asis'} 
+authors <- dbGetQuery(db, "SELECT * FROM Authors")
+print.table(head(authors))
+```
+
+The authors table is simple: it has a unique numeric id for the author and the author's name.
+
+```{r results='asis'} 
+paperAuthors <- dbGetQuery(db, "SELECT * FROM PaperAuthors")
+print.table(head(paperAuthors))
+```
+
+Similarly, the PaperAuthors table is also simple: it links PaperId's to AuthorId's.
+
+One quick question that comes to mind: which researchers published the most papers at NIPS this year? This is really straightforward to answer.
+
+```{r results='asis'}
+prolificAuthors <- dbGetQuery(db, "
+SELECT a.Name Author,
+       COUNT(a.Name) NumPapers
+FROM Authors a 
+INNER JOIN PaperAuthors p ON a.Id=p.AuthorId 
+GROUP BY a.Name 
+ORDER BY COUNT(a.Name) DESC
+LIMIT 10")
+print.table(prolificAuthors)
+```
+
+From this, we see that [Pradeep Ravikumar's](https://www.cs.utexas.edu/~pradeepr/) lab was the most prolific at publishing at this years NIPS, with 7 total papers.
+
+Let's see some of the common terms that appear in the papers. Here's a quick helper function to create wordclouds for these.
+```{r}
+library(tm)
+library(wordcloud)
+makeWordCloud <- function(documents) {
+  corpus = Corpus(VectorSource(tolower(documents)))
+  corpus = tm_map(corpus, removePunctuation)
+  corpus = tm_map(corpus, removeWords, stopwords("english"))
+  
+  # word size by word count
+  frequencies = DocumentTermMatrix(corpus)
+  # word size by tf-idf
+  #frequencies = DocumentTermMatrix(corpus, control = list(weighting = weightTfIdf))
+  word_frequencies = as.data.frame(as.matrix(frequencies))
+  
+  words <- colnames(word_frequencies)
+  freq <- colSums(word_frequencies)
+  wordcloud(words, freq,
+            min.freq=sort(freq, decreasing=TRUE)[[100]],
+            colors=brewer.pal(8, "Dark2"),
+            random.color=TRUE)  
+}
+```
+
+Let's look at the titles first.
+
+```{r fig.width=8, fig.height=8}
+titles <- dbGetQuery(db, "SELECT Title FROM Papers")
+makeWordCloud(titles$Title)
+```
+
+Unsurprisingly, "learning" is the single most common word in a paper title that's not an english stopword. Other usual suspects, such as "deep", "inference", "models", "optimization", and "networks" appear regularly as well.
+
+Next, let's look at the abstracts.
+
+```{r fig.width=8, fig.height=8}
+abstracts <- dbGetQuery(db, "SELECT Abstract FROM Papers")
+makeWordCloud(abstracts$Abstract)
+```
+
+For computational efficiency, we won't make a wordcloud over the entire paper text on this quick exploration.
+
+Let's go back to the authors of the papers. Another interesting question is "who tends to write papers together?"
+
+```{r results="asis"}
+commonCoauthors <- dbGetQuery(db, "
+SELECT a1.Name Author1,
+       a2.Name Author2,
+       COUNT(a1.Name) NumPapersTogether
+FROM Authors a1
+INNER JOIN PaperAuthors pa1 ON a1.Id=pa1.AuthorId
+INNER JOIN PaperAuthors pa2 ON pa2.PaperId=pa1.PaperId
+INNER JOIN Authors a2 ON a2.Id=pa2.AuthorId
+WHERE a1.Id < a2.Id
+GROUP BY a1.Name,
+         a2.Name 
+ORDER BY COUNT(a1.Name) DESC
+LIMIT 10")
+print.table(commonCoauthors)
+```
+
+Unsurprisingly, the two most common coauthor pairs each had one of our most prolific NIPS authors in them (Han and Pradeep).
+
+```{r fig.width=8, fig.height=8}
+library(ggvis)
+dbGetQuery(db, "
+SELECT EventType,
+       COUNT(EventType) NumPapers
+FROM Papers
+GROUP BY EventType") %>%
+    ggvis(~EventType, ~NumPapers) %>%
+    layer_bars(fill:="#20beff")
+```
+
+This covers a couple basic examples of what's in the data and what you can do with it. I encourage you to explore extending this in many different ways, such as through topic modelling.

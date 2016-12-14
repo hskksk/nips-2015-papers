@@ -1,6 +1,6 @@
 
 input/accepted_papers.html:
-	curl https://nips.cc/Conferences/2015/AcceptedPapers -o input/accepted_papers.html
+	curl https://nips.cc/Conferences/2016/AcceptedPapers -o input/accepted_papers.html
 
 output/accepted_papers.html: input/accepted_papers.html
 	cp input/accepted_papers.html output/accepted_papers.html
@@ -42,7 +42,12 @@ hashes: output/hashes.txt
 release: output/database.sqlite output/hashes.txt
 	zip -r -X output/release-`date -u +'%Y-%m-%d-%H-%M-%S'` output/*
 
-all: csv db hashes release
+output/wordCloud.html: output/database.sqlite
+	R -e "rmarkdown::render('src/wordCloud.Rmd', output_dir='output')"
+
+wordcloud: output/wordCloud.html
+
+all: csv db hashes release wordcloud
 
 clean:
 	rm -rf working
